@@ -9,17 +9,17 @@ Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
-limitations under the License. 
+limitations under the License.
 
 diff -rupN httpd-2.2.23-orig/modules/mappers/mod_userdir.c httpd-2.2.23/modules/mappers/mod_userdir.c
 --- httpd-2.2.23-orig/modules/mappers/mod_userdir.c     2011-02-07 19:58:51.000000000 -0700
 +++ httpd-2.2.23/modules/mappers/mod_userdir.c  2012-09-18 21:55:11.297206652 -0600
 @@ -51,6 +51,7 @@
- 
+
  #include "apr_strings.h"
  #include "apr_user.h"
 +#include "apr_env.h"
- 
+
  #define APR_WANT_STRFUNC
  #include "apr_want.h"
 @@ -63,6 +64,7 @@
@@ -27,7 +27,7 @@ diff -rupN httpd-2.2.23-orig/modules/mappers/mod_userdir.c httpd-2.2.23/modules/
  #include "http_config.h"
  #include "http_request.h"
 +#include "http_log.h"
- 
+
  #if !defined(WIN32) && !defined(OS2) && !defined(BEOS) && !defined(NETWARE)
  #define HAVE_UNIX_SUEXEC
 @@ -313,7 +315,7 @@ static int translate_userdir(request_rec
@@ -42,7 +42,7 @@ diff -rupN httpd-2.2.23-orig/modules/mappers/mod_userdir.c httpd-2.2.23/modules/
 @@ -324,6 +326,11 @@ static int translate_userdir(request_rec
              if (*userdirs && dname[0] == 0)
                  r->finfo = statbuf;
- 
+
 +            /* This is used later on to make sure the symlink exploit is not
 +             * exploitable.
 +             */
@@ -50,16 +50,16 @@ diff -rupN httpd-2.2.23-orig/modules/mappers/mod_userdir.c httpd-2.2.23/modules/
 +
              /* For use in the get_suexec_identity phase */
              apr_table_setn(r->notes, "mod_userdir_user", w);
- 
+
 diff -rupN httpd-2.2.23-orig/server/core.c httpd-2.2.23/server/core.c
 --- httpd-2.2.23-orig/server/core.c     2011-09-08 09:59:38.000000000 -0600
 +++ httpd-2.2.23/server/core.c  2012-09-25 16:04:14.863185577 -0600
 @@ -21,6 +21,7 @@
  #include "apr_hash.h"
  #include "apr_thread_proc.h"    /* for RLIMIT stuff */
- #include "apr_hooks.h"
+ #include "apr_random.h"
 +#include "apr_env.h"            /* for symlink protection + userdir stuff */
- 
+
  #define APR_WANT_IOVEC
  #define APR_WANT_STRFUNC
 @@ -3676,6 +3677,9 @@ static int default_handler(request_rec *
@@ -72,23 +72,23 @@ diff -rupN httpd-2.2.23-orig/server/core.c httpd-2.2.23/server/core.c
      /* XXX if/when somebody writes a content-md5 filter we either need to
       *     remove this support or coordinate when to use the filter vs.
       *     when to use this code
-@@ -3687,6 +3691,12 @@ static int default_handler(request_rec *
- 
-     d = (core_dir_config *)ap_get_module_config(r->per_dir_config,
-                                                 &core_module);
-+
+@@ -4507,6 +4507,11 @@ static int default_handler(request_rec *r)
+      */
+     int bld_content_md5;
+
 +    /* Pull in the vhost's server configuration. Mostly we just use this to
 +     * check the document root user against the open file user.
 +     */
 +    csconf = ap_get_module_config(r->server->module_config, &core_module);
 +
-     bld_content_md5 = (d->content_md5 & 1)
+     d = (core_dir_config *)ap_get_core_module_config(r->per_dir_config);
+     bld_content_md5 = (d->content_md5 == AP_CONTENT_MD5_ON)
                        && r->output_filters->frec->ftype != AP_FTYPE_RESOURCE;
- 
+
 @@ -3760,6 +3770,66 @@ static int default_handler(request_rec *
              return HTTP_FORBIDDEN;
          }
- 
+
 +        /* This is where the magic is. If a user is trying to hit the apache
 +         * symlink race condition, then we will know about it here.
 +         */
@@ -114,7 +114,7 @@ diff -rupN httpd-2.2.23-orig/server/core.c httpd-2.2.23/server/core.c
 +            post_dirstat_rv = apr_stat(&post_open_dirstat,
 +            csconf->ap_document_root, APR_FINFO_USER | APR_FINFO_LINK, r->pool);
 +        }
-+        
++
 +        post_fdstat_rv = apr_stat_fd(&post_open_finfo, fd, APR_FINFO_USER,
 +        r->pool);
 +
@@ -158,13 +158,13 @@ diff -rupN httpd-2.2.23-orig/srclib/apr/file_io/unix/filestat.c httpd-2.2.23/src
 @@ -336,4 +336,51 @@ APR_DECLARE(apr_status_t) apr_stat(apr_f
      }
  }
- 
+
 +APR_DECLARE(apr_status_t) apr_stat_fd(apr_finfo_t *finfo, apr_file_t *fd,
 +                                   apr_int32_t wanted, apr_pool_t *pool)
 +{
 +    struct_stat info;
 +    int srv = fstat(fd->filedes, &info);
- 
+
 +    if (srv == 0) {
 +        finfo->pool = pool;
 +        finfo->fname = fd->fname;
@@ -182,17 +182,17 @@ diff -rupN httpd-2.2.23-orig/srclib/apr/file_io/unix/filestat.c httpd-2.2.23/src
 +         * include files, APR cannot report a good reason why the stat()
 +         * of the file failed; there are cases where it can fail even though
 +         * the file exists.  This opens holes in Apache, for example, because
-+         * it becomes possible for someone to get a directory listing of a 
-+         * directory even though there is an index (eg. index.html) file in 
-+         * it.  If you do not have a problem with this, delete the above 
++         * it becomes possible for someone to get a directory listing of a
++         * directory even though there is an index (eg. index.html) file in
++         * it.  If you do not have a problem with this, delete the above
 +         * #error lines and start the compile again.  If you need to do this,
 +         * please submit a bug report to http://www.apache.org/bug_report.html
-+         * letting us know that you needed to do this.  Please be sure to 
++         * letting us know that you needed to do this.  Please be sure to
 +         * include the operating system you are using.
 +         */
 +        /* WARNING: All errors will be handled as not found
 +         */
-+#if !defined(ENOENT) 
++#if !defined(ENOENT)
 +        return APR_ENOENT;
 +#else
 +        /* WARNING: All errors but not found will be handled as not directory
