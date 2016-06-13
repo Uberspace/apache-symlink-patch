@@ -8,9 +8,11 @@ OS level permissions, even when instructing httpd to only follow symlinks if the
 matches (SymLinksIfOwnerMatch). This patch fixes that vulnerability. It also contains proof
 of concept code to check if the vulnerability has been fixed in the build.
 
+# Credits
+
 We want to thank [Bluehost](https://github.com/bluehost/apache-symlink-patch) for
 their work on this patch for httpd 2.2. We just slightly updated the patch to also
-work with httpd 2.4.
+work with upstream httpd 2.4.
 
 # License
 
